@@ -1,0 +1,15 @@
+{
+  "name": "Facebook Social Provider",
+  "description": "Social provider using Facebook Graph API",
+  "app": {
+    "script": ["socialprovider.js"]
+  },
+  "provides": [
+    "social"
+  ],
+  "permissions": [
+    "core.view",
+    "core.storage"
+  ],
+  "views": {}
+}

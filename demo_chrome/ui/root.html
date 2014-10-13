@@ -1,0 +1,32 @@
+<link rel="import" href="../polymer/polymer.html">
+<link rel='import' href='user.html'>
+
+<polymer-element name='facebook-root'>
+
+  <template>
+    <style>
+    </style>
+
+    <template repeat='{{ u in ui.users }}' vertical layout>
+      <facebook-user user='{{ u }}'></facebook-user>
+    </template>
+
+    <div hidden?="{{ !ui.selectedUser }}" style="position:relative;top:100px;">
+      Send a message to {{ ui.selectedUser.name }}
+      <input id="messageInput" type="text" value="{{ messageText }}"></input>
+      <button on-tap="{{ send }}">Send</button>
+    </div>
+
+    <div style="position:relative;top:100px;">
+      Incoming messages
+
+      <template repeat='{{ m in ui.messages }}' vertical layout>
+        <div>{{ m.from.userId }}: {{ m.message }}</div>
+      </template>
+    </div>
+
+  </template>
+
+  <script src="root.js"></script>
+
+</polymer-element>

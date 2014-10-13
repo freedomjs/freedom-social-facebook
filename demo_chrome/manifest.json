@@ -1,0 +1,24 @@
+{
+  "manifest_version": 2,
+  "name": "TestFreedomSocialFacebook",
+  "description": "Test chrome extension for freedom-social-facebook",
+  "minimum_chrome_version": "34",
+  "version": "0.1.0",
+  "background": {
+    "persistent": true,
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "permissions": [
+  // TODO: are these both needed?
+    "tabs",
+    "https://www.facebook.com/",
+    "https://graph.facebook.com/"
+  ],
+  "content_security_policy": "script-src 'self' 'unsafe-eval'; object-src 'self'",
+  "browser_action": {
+    "default_title": "Test freedom-social-facebook",
+    "default_popup": "ui/popup.html"
+  }
+}
