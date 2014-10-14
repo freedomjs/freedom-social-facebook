@@ -258,6 +258,8 @@ FacebookSocialProvider.prototype.processNotification_ = function(notification) {
     return;
   }
 
+  // TODO: can we check that the message/comment was posted by the uproxy app?
+
   // Check that message is from a friend.
   this.log('from: ' + notification.from.id);
   var appFriend = this.appFriends[notification.from.id];
