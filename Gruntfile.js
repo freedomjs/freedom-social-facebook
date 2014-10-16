@@ -36,6 +36,15 @@ module.exports = function(grunt) {
           filter: 'isFile',
           expand: true
         }]
+      },
+      src: {
+        files: [{
+          src: ['src/*'],
+          dest: 'build/src/',
+          flatten: true,
+          filter: 'isFile',
+          expand: true
+        }]
       }
     },
     /* TODO(dborkan): add testing
@@ -60,6 +69,9 @@ module.exports = function(grunt) {
   grunt.loadNpmTasks('grunt-jasmine-node');
 
   // Default tasks.
+  grunt.registerTask('compile', [
+    'copy:src'
+  ]);
   grunt.registerTask('chrome_demo', [
     'copy:demo_chrome'
   ]);
@@ -72,5 +84,5 @@ module.exports = function(grunt) {
   ]);
   */
   // TODO(dborkan): add compile as default for npm packaging
-  grunt.registerTask('default', ['chrome_demo']);
+  grunt.registerTask('default', ['compile']);
 };

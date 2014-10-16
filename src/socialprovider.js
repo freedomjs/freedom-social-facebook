@@ -37,8 +37,9 @@ var FacebookSocialProvider = function(dispatchEvent) {
   var social = freedom.social();
   this.ERRCODE = social.ERRCODE;
   this.credentials = null;
-  this.debug = true;
+  this.debug = false;
   this.appFriends = {};
+  this.monitorIntervalId = null;
 };
 
 /**
@@ -90,9 +91,31 @@ FacebookSocialProvider.prototype.completeLogin_ = function(continuation) {
   this.notificationCutoffTime_ = Date.now();
   this.monitorForIncomingMessages_();
   this.loadBuddyList_();
+  this.broadcastLogin_();  // Must be called after loadBuddyList
 
-  // TODO: pass my client state
-  continuation();
+  var meResp = this.makeGetRequest_('me');
+  this.log('got meResp ', meResp);
+  continuation({
+    userId: meResp.id,
+    clientId: meResp.id + '/client',  // TODO: get real client
+    status: 'ONLINE',
+    lastUpdated: Date.now(),
+    lastSeen: Date.now()
+  });
+  // Emit onUserProfile so we get our own name
+  this.dispatchEvent('onUserProfile', {
+    userId: meResp.id,
+    lastUpdated: Date.now(),
+    name: meResp.name,
+    url: '',
+    imageData: ''
+  });
+};
+
+// TODO: can this post the full instance message?
+// TODO: this needs to send to every instance, not just every friend
+FacebookSocialProvider.prototype.broadcastLogin_ = function() {
+
 }
 
 /**
@@ -101,7 +124,7 @@ FacebookSocialProvider.prototype.completeLogin_ = function(continuation) {
  */
 FacebookSocialProvider.prototype.monitorForIncomingMessages_ = function() {
   // TODO: ensure that this isn't called multiple times...  use clearInterval
-  setInterval(function() {
+  this.monitorIntervalId = setInterval(function() {
     var notificationsResp = this.makeGetRequest_('me/notifications');
     this.log('got notifications ', notificationsResp);
     if (notificationsResp.data) {
@@ -134,9 +157,6 @@ FacebookSocialProvider.prototype.monitorForIncomingMessages_ = function() {
  * @private
  */
 FacebookSocialProvider.prototype.loadBuddyList_ = function() {
-  var meResp = this.makeGetRequest_('me');
-  this.log('got meResp ', meResp);
-
   // TODO: check that these are correct!
   // TODO: what if user gave permissions for uproxy to post but not visible
   // to anyone?  can we detect this?  From quickly testing this it doesn't
@@ -187,7 +207,8 @@ FacebookSocialProvider.prototype.makeGetRequest_ = function(resourceStr) {
 
 
 FacebookSocialProvider.prototype.makePostRequest_ = function(resourceStr,
-                                                             postArgs) {
+                                                             postArgs,
+                                                             callback) {
   // Create url from resourceStr and accessToken.
   var url = 'https://graph.facebook.com/v2.1/' + resourceStr + '?' + 
       'access_token=' + this.credentials['accessToken'];
@@ -200,6 +221,9 @@ FacebookSocialProvider.prototype.makePostRequest_ = function(resourceStr,
       this.log('got response ', response);
       if (response.error) {
         console.error('Error sending message, ', response.error);
+      }
+      if (callback) {
+        callback(response);
       }
     }
     catch (e) {
@@ -412,13 +436,17 @@ FacebookSocialProvider.prototype.sendMessage = function(to, msg, continuation) {
           tags: "'" + appFriend.id  + "'",
           place: 111798695513697, // New York City, TODO: define
           message: 'uproxy: ' + msg
-        });
+        },
+        function(response) {
+          appFriend.conversationId = response.id;  // TODO: verify this is correct
+        }.bind(this));
   }
   continuation();
 };
 
 FacebookSocialProvider.prototype.logout = function(continuation) {
   this.appFriends = {};
+  clearInterval(this.monitorIntervalId);
   // TODO: do I need to emit stuff?
   continuation();
 };
