@@ -112,10 +112,30 @@ FacebookSocialProvider.prototype.completeLogin_ = function(continuation) {
   });
 };
 
-// TODO: can this post the full instance message?
+// TODO: can this post the full instance message?  Should it?  this might differ from GTalk where the caller (uProxy) manually sends the instance message to each peer who it finds out is online
 // TODO: this needs to send to every instance, not just every friend
 FacebookSocialProvider.prototype.broadcastLogin_ = function() {
-
+  var commaSeparatedFriends = getValues(this.appFriends).map(
+      function(x) { return x.id; }).join(',');
+  console.log('commaSeparatedFriends: ' + commaSeparatedFriends);  // TODO: remove
+  // TODO: should I store this post id and just re-use it over and over rather than creating new ones
+  this.makePostRequest_('me/feed',
+      {
+        privacy: "{'allow': '" + commaSeparatedFriends + "', 'value': 'CUSTOM'}",
+        tags: "'" + commaSeparatedFriends  + "'",  // TODO: use quotes?
+        place: 111798695513697, // New York City, TODO: define
+        message: 'login to uproxy at ' + Date.now()
+      }, function(response) {
+        // TODO: if the user is currently looking at facebook, and sees this notification,
+        // when it is deleting, if they click on it, they will get a broken link error
+        // (not a problem if they refresh FB or don't have it open)
+        // Also this won't be a problem if the login post just re-uses one comment thread!!!
+        // TODO: just use 1 comment thread!
+        console.log('got response from broadcastLogin_', response);
+        setTimeout(function() {
+          this.makeDeleteRequest_(response.id);
+        }.bind(this), 5000);  // TODO: constant
+      }.bind(this));
 }
 
 /**
@@ -127,7 +147,7 @@ FacebookSocialProvider.prototype.monitorForIncomingMessages_ = function() {
   this.monitorIntervalId = setInterval(function() {
     var notificationsResp = this.makeGetRequest_('me/notifications');
     this.log('got notifications ', notificationsResp);
-    if (notificationsResp.data) {
+    if (notificationsResp.data && notificationsResp.data.length > 0) {
       // TODO: speed this up by processing in order and stopping at cutoff?
       // Process notifications in ascending time order (reverse array order)
 
@@ -248,6 +268,38 @@ FacebookSocialProvider.prototype.makePostRequest_ = function(resourceStr,
 };
 
 
+FacebookSocialProvider.prototype.makeDeleteRequest_ = function(resourceStr) {
+  // Create url from resourceStr and accessToken.
+  var url = 'https://graph.facebook.com/v2.1/' + resourceStr + '?' + 
+      'access_token=' + this.credentials['accessToken'];
+
+  var xhr = new XMLHttpRequest();
+  xhr.open('DELETE', url, true);  // async
+  xhr.addEventListener('load', function(event) {
+    try {
+      var response = JSON.parse(xhr.response);
+      this.log('got delete response ', response);
+    }
+    catch (e) {
+      console.error(e);
+    }
+  }.bind(this), false);
+  xhr.addEventListener('error', function(evt) {
+    // TODO: this is an error reaching the server, not necessarily an error
+    // returned from the server
+    console.error('Error occurred while making delete request', evt);
+  }.bind(this), false);
+
+  // TODO: is this needed for delete?
+  var allArgs = {};
+  allArgs['accesss_token'] = this.credentials['accessToken'];  // TODO: needed?
+  this.log('allArgs ', allArgs);
+  var postString = urlEncode(allArgs);
+  this.log('postString: ' + postString);
+  xhr.send(postString);
+};
+
+
 function urlEncode(obj) {
   var str = ''
   for (var i in obj) {
@@ -277,12 +329,6 @@ FacebookSocialProvider.prototype.processNotification_ = function(notification) {
   // Check that message is for uproxy.
   var notificationMessage = notification.object.message;
   this.log('got notificationMessage: ' + notificationMessage);
-  if (notificationMessage.indexOf('uproxy: ') !== 0) {  // TODO: make the uproxy prefix const
-    this.log('ignoring message not for uproxy: ' + notificationMessage);
-    return;
-  }
-
-  // TODO: can we check that the message/comment was posted by the uproxy app?
 
   // Check that message is from a friend.
   this.log('from: ' + notification.from.id);
@@ -292,6 +338,32 @@ FacebookSocialProvider.prototype.processNotification_ = function(notification) {
         notification.from.id);
     return;
   }
+
+  // Any friend sending us a notification should be considered to ONLINE.
+  if (appFriend.status != 'ONLINE') {
+    appFriend.status = 'ONLINE';
+    this.dispatchEvent('onClientState', appFriend.getClientState());
+  }
+
+  // TODO: this is slightly weird that the first time uProxy knows the client is
+  // online is when we get a message..  can there be race conditions here?
+  // Do events always get picked up in the order in which they are emitted?
+
+
+  // TODO: set a timeout to switch them to offline at some point in the future?
+  if (notificationMessage.indexOf('login to uproxy') === 0) {
+    // This was just a broadcast message to let us know the friend is online.
+    // TODO: can we add instance info here to eliminate extra requests?  this
+    // may require a change in uProxy
+    // Don't update the appFriend.conversationId here, as this is a shared
+    // message, not the 1:1 conversation to be re-used!!
+    return;  // TODO: clean up this special case
+  } else if (notificationMessage.indexOf('uproxy: ') !== 0) {  // TODO: make the uproxy prefix const
+    this.log('ignoring message not for uproxy: ' + notificationMessage);
+    return;
+  }
+
+  // TODO: can we check that the message/comment was posted by the uproxy app?
 
   // Read the conversation (status) object.
   // TODO: move this to the AppFriend class?
@@ -309,13 +381,7 @@ FacebookSocialProvider.prototype.processNotification_ = function(notification) {
     // to prevent emiting a message that was actually generated by the logged
     // in user).
     this.dispatchEvent('onMessage', {
-      from: {
-        userId: appFriend.id,
-        clientId: appFriend.getClientId(),
-        status: 'ONLINE',  // TODO: what to put?
-        lastUpdated: appFriend.lastUpdated, // TODO: what to put?
-        lastSeen: appFriend.lastSeen, // TODO: what to put?
-      },
+      from: appFriend.getClientState(),
       message: conversation.message.substr('uproxy: '.length)
     });
   }
@@ -342,13 +408,7 @@ FacebookSocialProvider.prototype.processNotification_ = function(notification) {
       // Got a new comment!
       // TODO: refactor this to not duplicate code
       this.dispatchEvent('onMessage', {
-        from: {
-          userId: appFriend.id,
-          clientId: appFriend.getClientId(),
-          status: 'ONLINE',  // TODO: what to put?
-          lastUpdated: appFriend.lastUpdated, // TODO: what to put?
-          lastSeen: appFriend.lastSeen, // TODO: what to put?
-        },
+        from: appFriend.getClientState(),
         message: comment.message.substr('uproxy: '.length)
       });
     }
@@ -427,7 +487,14 @@ FacebookSocialProvider.prototype.sendMessage = function(to, msg, continuation) {
   if (appFriend.conversationId) {
     // Post a comment on the existing conversation.
     this.makePostRequest_(appFriend.conversationId + '/comments',
-        {message: 'uproxy: ' + msg});
+        {message: 'uproxy: ' + msg},
+        function(response) {
+          // Delete comment sometime after it's been posted.
+          console.log('got response from posting comment', response);
+          setTimeout(function() {
+            this.makeDeleteRequest_(response.id);
+          }.bind(this), 5000);  // TODO: constant
+        }.bind(this));
   } else {
     // Create a new conversation.
     this.makePostRequest_('me/feed',
@@ -476,13 +543,16 @@ function AppFriend(id, name, picture) {
   this.lastUpdated = Date.now();
   this.lastSeen = Date.now();
   this.conversationId = null;
+  // Friend is considered offline until we get the first message from them
+  // TODO: how does this go back to offline when they logout?
+  this.status = 'OFFLINE';
 }
 
 AppFriend.prototype.getClientState = function() {
   return {
     userId: this.id,
     clientId: this.getClientId(),
-    status: 'ONLINE',
+    status: this.status,
     lastUpdated: this.lastUpdated,
     lastSeen: this.lastSeen
   };
