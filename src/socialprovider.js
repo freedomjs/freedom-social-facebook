@@ -8,6 +8,7 @@
 
 // TODO:
 // - handle paging in comments and notifications
+// - use storage for continuing comment threads, pictures
 // - handle token refresh
 // - add tests
 // - detecting when a user has signed offline
