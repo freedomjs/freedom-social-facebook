@@ -7,8 +7,21 @@
  **/
 
 // TODO:
-// handle paging
-// handle token refresh
+// - handle paging in comments and notifications
+// - handle token refresh
+// - add tests
+// - detecting when a user has signed offline
+// - last seen / active timestamps
+// - things to try:
+//   - editing existing comments / posts
+//   - hiding posts rather than deleting them
+//   - embed instance information in broadcast (may require uProxy change)
+
+// Facebook place id for New York City, used as a default location for tagging
+// users.
+// TODO: what location to use?  We don't want to reveal users locations, nor
+// give false locations.
+var DEFAULT_USER_LOCATION = 111798695513697;
 
 // Global declarations for node.js
 if (typeof global !== 'undefined') {
@@ -97,7 +110,8 @@ FacebookSocialProvider.prototype.completeLogin_ = function(continuation) {
   this.log('got meResp ', meResp);
   continuation({
     userId: meResp.id,
-    clientId: meResp.id + '/client',  // TODO: get real client
+    // TODO: include uProxy or instance in client?
+    clientId: meResp.id + '/client',
     status: 'ONLINE',
     lastUpdated: Date.now(),
     lastSeen: Date.now()
@@ -122,8 +136,8 @@ FacebookSocialProvider.prototype.broadcastLogin_ = function() {
   this.makePostRequest_('me/feed',
       {
         privacy: "{'allow': '" + commaSeparatedFriends + "', 'value': 'CUSTOM'}",
-        tags: "'" + commaSeparatedFriends  + "'",  // TODO: use quotes?
-        place: 111798695513697, // New York City, TODO: define
+        tags: "'" + commaSeparatedFriends  + "'",
+        place: DEFAULT_USER_LOCATION,
         message: 'login to uproxy at ' + Date.now()
       }, function(response) {
         // TODO: if the user is currently looking at facebook, and sees this notification,
@@ -187,8 +201,7 @@ FacebookSocialProvider.prototype.loadBuddyList_ = function() {
   var appFriendsResp = this.makeGetRequest_('me/friends');
   for (var i = 0; i < appFriendsResp.data.length; ++i) {
     var friend = appFriendsResp.data[i];
-    // TODO: how to get picture?
-    var appFriend = new AppFriend(friend.id, friend.name, null);
+    var appFriend = new AppFriend(this, friend.id, friend.name);
     this.appFriends[friend.id] = appFriend;
     this.dispatchEvent('onUserProfile', appFriend.getUserProfile());
     this.dispatchEvent('onClientState', appFriend.getClientState());
@@ -198,7 +211,11 @@ FacebookSocialProvider.prototype.loadBuddyList_ = function() {
 
 
 // TODO: document, this request is sync
-FacebookSocialProvider.prototype.makeGetRequest_ = function(resourceStr) {
+FacebookSocialProvider.prototype.makeGetRequest_ = function(resourceStr,
+                                                            asyncCallback) {
+  // Default isAsync to false.
+  var isAsync = asyncCallback ? true : false;
+
   // Create url from resourceStr and accessToken.
   var hasArgs = resourceStr.indexOf('?') >= 0;
   var url = ('https://graph.facebook.com/v2.1/' + resourceStr) + 
@@ -206,11 +223,14 @@ FacebookSocialProvider.prototype.makeGetRequest_ = function(resourceStr) {
       'access_token=' + this.credentials['accessToken'];
 
   var xhr = new XMLHttpRequest();
-  xhr.open('GET', url, false);  // sync
-  var response = null;
+  xhr.open('GET', url, isAsync);
+  var response = undefined;
   xhr.addEventListener('load', function(event) {
     try {
       response = JSON.parse(xhr.response);
+      if (asyncCallback) {
+        asyncCallback(response);
+      }
     }
     catch (e) {
       console.error(e);
@@ -220,7 +240,7 @@ FacebookSocialProvider.prototype.makeGetRequest_ = function(resourceStr) {
     console.error('Error occurred while making get request', evt);
   }, false);
 
-  // xhr.send will block (due to async=false) until response is returned.
+  // xhr.send will block if isAsync==false
   xhr.send();
   return response;
 };
@@ -501,7 +521,7 @@ FacebookSocialProvider.prototype.sendMessage = function(to, msg, continuation) {
         {
           privacy: "{'allow': '" + appFriend.id + "', 'value': 'CUSTOM'}",
           tags: "'" + appFriend.id  + "'",
-          place: 111798695513697, // New York City, TODO: define
+          place: DEFAULT_USER_LOCATION,
           message: 'uproxy: ' + msg
         },
         function(response) {
@@ -536,16 +556,28 @@ inherits = function(childCtor, parentCtor) {
   };
 };
 
-function AppFriend(id, name, picture) {
+function AppFriend(facebookSocialProvider, id, name) {
+  this.facebookSocialProvider = facebookSocialProvider;
   this.id = id;
   this.name = name;
-  this.picture = picture;
+  this.picture = null;
   this.lastUpdated = Date.now();
   this.lastSeen = Date.now();
   this.conversationId = null;
   // Friend is considered offline until we get the first message from them
   // TODO: how does this go back to offline when they logout?
   this.status = 'OFFLINE';
+
+  // Asynchronously get image.  TODO: add to storage
+  facebookSocialProvider.makeGetRequest_(id + '/picture?redirect=false',
+      function(response) {
+        if (response.data && response.data.url) {
+          this.picture = response.data.url;
+          console.log('got picture: ' + response.data.url);
+          facebookSocialProvider.dispatchEvent('onUserProfile',
+                                               this.getUserProfile());
+        }
+      }.bind(this));
 }
 
 AppFriend.prototype.getClientState = function() {
