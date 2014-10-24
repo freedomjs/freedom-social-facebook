@@ -63,6 +63,8 @@ var FacebookSocialProvider = function(dispatchEvent) {
      // TODO(dborkan): define options
  */
 FacebookSocialProvider.prototype.login = function(loginOpts, continuation) {
+  this.prefix = 'uproxy: ';  // TODO: get from loginOpts
+  this.loginMessage = 'login to ' + this.prefix;
   if (this.credentials) {
     // Already have login credentials, load buddylist
     // TODO: clear state?
@@ -111,7 +113,7 @@ FacebookSocialProvider.prototype.completeLogin_ = function(continuation) {
   this.log('got meResp ', meResp);
   continuation({
     userId: meResp.id,
-    // TODO: include uProxy or instance in client?
+    // TODO: include uProxy or instance info in the client?
     clientId: meResp.id + '/client',
     status: 'ONLINE',
     lastUpdated: Date.now(),
@@ -139,7 +141,7 @@ FacebookSocialProvider.prototype.broadcastLogin_ = function() {
         privacy: "{'allow': '" + commaSeparatedFriends + "', 'value': 'CUSTOM'}",
         tags: "'" + commaSeparatedFriends  + "'",
         place: DEFAULT_USER_LOCATION,
-        message: 'login to uproxy at ' + Date.now()
+        message: this.loginMessage + Date.now()
       }, function(response) {
         // TODO: if the user is currently looking at facebook, and sees this notification,
         // when it is deleting, if they click on it, they will get a broken link error
@@ -372,15 +374,15 @@ FacebookSocialProvider.prototype.processNotification_ = function(notification) {
 
 
   // TODO: set a timeout to switch them to offline at some point in the future?
-  if (notificationMessage.indexOf('login to uproxy') === 0) {
+  if (notificationMessage.indexOf(this.loginMessage) === 0) {
     // This was just a broadcast message to let us know the friend is online.
     // TODO: can we add instance info here to eliminate extra requests?  this
     // may require a change in uProxy
     // Don't update the appFriend.conversationId here, as this is a shared
     // message, not the 1:1 conversation to be re-used!!
     return;  // TODO: clean up this special case
-  } else if (notificationMessage.indexOf('uproxy: ') !== 0) {  // TODO: make the uproxy prefix const
-    this.log('ignoring message not for uproxy: ' + notificationMessage);
+  } else if (notificationMessage.indexOf(this.prefix) !== 0) {
+    this.log('ignoring message: ' + notificationMessage);
     return;
   }
 
@@ -403,7 +405,7 @@ FacebookSocialProvider.prototype.processNotification_ = function(notification) {
     // in user).
     this.dispatchEvent('onMessage', {
       from: appFriend.getClientState(),
-      message: conversation.message.substr('uproxy: '.length)
+      message: conversation.message.substr(this.prefix.length)
     });
   }
   if (conversation.comments && conversation.comments.data) {
@@ -416,9 +418,9 @@ FacebookSocialProvider.prototype.processNotification_ = function(notification) {
         // Comment not from friend (may be from ourselves), ignore.
         this.log('ignoring comment not from friend', comment);
         continue;
-      } else if (comment.message.indexOf('uproxy: ') !== 0) {
+      } else if (comment.message.indexOf(this.prefix) !== 0) {
         // Comment not through uproxy, ignore.
-        this.log('ignoring comment not for uproxy', comment);
+        this.log('ignoring comment:', comment);
         continue;
       } else if (Date.parse(comment.created_time) <=
           this.notificationCutoffTime_) {
@@ -430,7 +432,7 @@ FacebookSocialProvider.prototype.processNotification_ = function(notification) {
       // TODO: refactor this to not duplicate code
       this.dispatchEvent('onMessage', {
         from: appFriend.getClientState(),
-        message: comment.message.substr('uproxy: '.length)
+        message: comment.message.substr(this.prefix.length)
       });
     }
   }
@@ -508,11 +510,11 @@ FacebookSocialProvider.prototype.sendMessage = function(to, msg, continuation) {
   if (appFriend.conversationId) {
     // Post a comment on the existing conversation.
     this.makePostRequest_(appFriend.conversationId + '/comments',
-        {message: 'uproxy: ' + msg},
+        {message: this.prefix + msg},
         function(response) {
-          // Delete comment sometime after it's been posted.
           console.log('got response from posting comment', response);
           setTimeout(function() {
+            // Delete comment sometime after it's been posted.
             this.makeDeleteRequest_(response.id);
           }.bind(this), 5000);  // TODO: constant
         }.bind(this));
@@ -523,7 +525,7 @@ FacebookSocialProvider.prototype.sendMessage = function(to, msg, continuation) {
           privacy: "{'allow': '" + appFriend.id + "', 'value': 'CUSTOM'}",
           tags: "'" + appFriend.id  + "'",
           place: DEFAULT_USER_LOCATION,
-          message: 'uproxy: ' + msg
+          message: this.prefix + msg
         },
         function(response) {
           appFriend.conversationId = response.id;  // TODO: verify this is correct
