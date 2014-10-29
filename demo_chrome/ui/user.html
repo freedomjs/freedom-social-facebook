@@ -6,7 +6,10 @@
     <style>
     </style>
 
-    <div on-tap="{{ select }}">{{user.name}} ({{user.userId}})</div>
+    <div on-tap="{{ select }}">
+      <img src="{{user.imageData}}">
+      {{user.name}} ({{user.userId}})
+    </div>
 
   </template>
 

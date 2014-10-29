@@ -5,6 +5,13 @@ function UserInterface() {
 
   freedom.on('recv-user', function(data) {
     console.log('recv-user called in ux.js, ', data);
+    // Remove user from array if they already exist.
+    for (var i = 0; i < this.users.length; ++i) {
+      if (this.users[i].userId == data.userId) {
+        this.users.splice(i, 1);
+        break;
+      }
+    }
     this.users.push(data);
   }.bind(this));
 

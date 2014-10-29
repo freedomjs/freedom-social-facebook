@@ -11,7 +11,7 @@
     ]
   },
   "permissions": [
-  // TODO: are these both needed?
+    "storage",
     "tabs",
     "https://www.facebook.com/",
     "https://graph.facebook.com/"

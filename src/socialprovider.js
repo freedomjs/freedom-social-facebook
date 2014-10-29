@@ -53,7 +53,10 @@ var FacebookSocialProvider = function(dispatchEvent) {
   this.credentials = null;
   this.debug = false;
   this.appFriends = {};
-  this.monitorIntervalId = null;
+  this.notificationMonitorIntervalId_ = null;
+
+  // TODO: clear on logout?
+  this.storage = freedom['core.storage']();
 };
 
 /**
@@ -64,7 +67,6 @@ var FacebookSocialProvider = function(dispatchEvent) {
  */
 FacebookSocialProvider.prototype.login = function(loginOpts, continuation) {
   this.prefix = 'uproxy: ';  // TODO: get from loginOpts
-  this.loginMessage = 'login to ' + this.prefix;
   if (this.credentials) {
     // Already have login credentials, load buddylist
     // TODO: clear state?
@@ -104,13 +106,13 @@ FacebookSocialProvider.prototype.onCredentials_ = function(continuation, msg) {
 };
 
 FacebookSocialProvider.prototype.completeLogin_ = function(continuation) {
+  var meResp = this.makeGetRequest('me');
+  this.myId = meResp.id;
+  this.log('got meResp ', meResp);
+
   this.notificationCutoffTime_ = Date.now();
   this.monitorForIncomingMessages_();
-  this.loadBuddyList_();
-  this.broadcastLogin_();  // Must be called after loadBuddyList
-
-  var meResp = this.makeGetRequest_('me');
-  this.log('got meResp ', meResp);
+  this.appFriends = this.getAppFriends_();
   continuation({
     userId: meResp.id,
     // TODO: include uProxy or instance info in the client?
@@ -129,40 +131,16 @@ FacebookSocialProvider.prototype.completeLogin_ = function(continuation) {
   });
 };
 
-// TODO: can this post the full instance message?  Should it?  this might differ from GTalk where the caller (uProxy) manually sends the instance message to each peer who it finds out is online
-// TODO: this needs to send to every instance, not just every friend
-FacebookSocialProvider.prototype.broadcastLogin_ = function() {
-  var commaSeparatedFriends = getValues(this.appFriends).map(
-      function(x) { return x.id; }).join(',');
-  console.log('commaSeparatedFriends: ' + commaSeparatedFriends);  // TODO: remove
-  // TODO: should I store this post id and just re-use it over and over rather than creating new ones
-  this.makePostRequest_('me/feed',
-      {
-        privacy: "{'allow': '" + commaSeparatedFriends + "', 'value': 'CUSTOM'}",
-        tags: "'" + commaSeparatedFriends  + "'",
-        place: DEFAULT_USER_LOCATION,
-        message: this.loginMessage + Date.now()
-      }, function(response) {
-        // TODO: if the user is currently looking at facebook, and sees this notification,
-        // when it is deleting, if they click on it, they will get a broken link error
-        // (not a problem if they refresh FB or don't have it open)
-        // Also this won't be a problem if the login post just re-uses one comment thread!!!
-        // TODO: just use 1 comment thread!
-        console.log('got response from broadcastLogin_', response);
-        setTimeout(function() {
-          this.makeDeleteRequest_(response.id);
-        }.bind(this), 5000);  // TODO: constant
-      }.bind(this));
-}
-
 /**
  * @method monitorForIncomingMessages_
  * @private
  */
 FacebookSocialProvider.prototype.monitorForIncomingMessages_ = function() {
+  return;  // TODO: handle this
+
   // TODO: ensure that this isn't called multiple times...  use clearInterval
-  this.monitorIntervalId = setInterval(function() {
-    var notificationsResp = this.makeGetRequest_('me/notifications');
+  this.notificationMonitorIntervalId_ = setInterval(function() {
+    var notificationsResp = this.makeGetRequest('me/notifications');
     this.log('got notifications ', notificationsResp);
     if (notificationsResp.data && notificationsResp.data.length > 0) {
       // TODO: speed this up by processing in order and stopping at cutoff?
@@ -190,32 +168,35 @@ FacebookSocialProvider.prototype.monitorForIncomingMessages_ = function() {
 }
 
 /**
- * @method loadBuddyList_
+ * @method getAppFriends_
  * @private
  */
-FacebookSocialProvider.prototype.loadBuddyList_ = function() {
+FacebookSocialProvider.prototype.getAppFriends_ = function() {
   // TODO: check that these are correct!
   // TODO: what if user gave permissions for uproxy to post but not visible
   // to anyone?  can we detect this?  From quickly testing this it doesn't
   // seem to prevent messaging.....
-  var permissionsResp = this.makeGetRequest_('me/permissions');
+  var permissionsResp = this.makeGetRequest('me/permissions');
   this.log('got permissionsResp ', permissionsResp);
 
-  var appFriendsResp = this.makeGetRequest_('me/friends');
+  var appFriends = {};
+  var appFriendsResp = this.makeGetRequest('me/friends');
   for (var i = 0; i < appFriendsResp.data.length; ++i) {
     var friend = appFriendsResp.data[i];
     var appFriend = new AppFriend(this, friend.id, friend.name);
-    this.appFriends[friend.id] = appFriend;
-    this.dispatchEvent('onUserProfile', appFriend.getUserProfile());
-    this.dispatchEvent('onClientState', appFriend.getClientState());
+    appFriends[friend.id] = appFriend;
+    // TODO: dispatch events somewhere.
+    // this.dispatchEvent('onUserProfile', appFriend.getUserProfile());
+    // this.dispatchEvent('onClientState', appFriend.getClientState());
   }
-  this.log('loaded appFriends: ', this.appFriends);
+  this.log('loaded appFriends: ', appFriends);
+  return appFriends;
 };
 
 
 // TODO: document, this request is sync
-FacebookSocialProvider.prototype.makeGetRequest_ = function(resourceStr,
-                                                            asyncCallback) {
+FacebookSocialProvider.prototype.makeGetRequest = function(resourceStr,
+                                                           asyncCallback) {
   // Default isAsync to false.
   var isAsync = asyncCallback ? true : false;
 
@@ -249,9 +230,9 @@ FacebookSocialProvider.prototype.makeGetRequest_ = function(resourceStr,
 };
 
 
-FacebookSocialProvider.prototype.makePostRequest_ = function(resourceStr,
-                                                             postArgs,
-                                                             callback) {
+FacebookSocialProvider.prototype.makePostRequest = function(resourceStr,
+                                                            postArgs,
+                                                            callback) {
   // Create url from resourceStr and accessToken.
   var url = 'https://graph.facebook.com/v2.1/' + resourceStr + '?' + 
       'access_token=' + this.credentials['accessToken'];
@@ -291,38 +272,6 @@ FacebookSocialProvider.prototype.makePostRequest_ = function(resourceStr,
 };
 
 
-FacebookSocialProvider.prototype.makeDeleteRequest_ = function(resourceStr) {
-  // Create url from resourceStr and accessToken.
-  var url = 'https://graph.facebook.com/v2.1/' + resourceStr + '?' + 
-      'access_token=' + this.credentials['accessToken'];
-
-  var xhr = new XMLHttpRequest();
-  xhr.open('DELETE', url, true);  // async
-  xhr.addEventListener('load', function(event) {
-    try {
-      var response = JSON.parse(xhr.response);
-      this.log('got delete response ', response);
-    }
-    catch (e) {
-      console.error(e);
-    }
-  }.bind(this), false);
-  xhr.addEventListener('error', function(evt) {
-    // TODO: this is an error reaching the server, not necessarily an error
-    // returned from the server
-    console.error('Error occurred while making delete request', evt);
-  }.bind(this), false);
-
-  // TODO: is this needed for delete?
-  var allArgs = {};
-  allArgs['accesss_token'] = this.credentials['accessToken'];  // TODO: needed?
-  this.log('allArgs ', allArgs);
-  var postString = urlEncode(allArgs);
-  this.log('postString: ' + postString);
-  xhr.send(postString);
-};
-
-
 function urlEncode(obj) {
   var str = ''
   for (var i in obj) {
@@ -336,6 +285,8 @@ function urlEncode(obj) {
 
 
 FacebookSocialProvider.prototype.processNotification_ = function(notification) {
+  // TODO: handle this
+  return;
   // TODO: can you be spoofed?  what if a message is prefixed with uProxy:
   // but doesn't have the right privacy settings?
 
@@ -363,25 +314,14 @@ FacebookSocialProvider.prototype.processNotification_ = function(notification) {
   }
 
   // Any friend sending us a notification should be considered to ONLINE.
+  // TODO: set a timeout to switch them to offline at some point in the future?
   if (appFriend.status != 'ONLINE') {
     appFriend.status = 'ONLINE';
     this.dispatchEvent('onClientState', appFriend.getClientState());
   }
 
-  // TODO: this is slightly weird that the first time uProxy knows the client is
-  // online is when we get a message..  can there be race conditions here?
-  // Do events always get picked up in the order in which they are emitted?
 
-
-  // TODO: set a timeout to switch them to offline at some point in the future?
-  if (notificationMessage.indexOf(this.loginMessage) === 0) {
-    // This was just a broadcast message to let us know the friend is online.
-    // TODO: can we add instance info here to eliminate extra requests?  this
-    // may require a change in uProxy
-    // Don't update the appFriend.conversationId here, as this is a shared
-    // message, not the 1:1 conversation to be re-used!!
-    return;  // TODO: clean up this special case
-  } else if (notificationMessage.indexOf(this.prefix) !== 0) {
+  if (notificationMessage.indexOf(this.prefix) !== 0) {
     this.log('ignoring message: ' + notificationMessage);
     return;
   }
@@ -390,12 +330,12 @@ FacebookSocialProvider.prototype.processNotification_ = function(notification) {
 
   // Read the conversation (status) object.
   // TODO: move this to the AppFriend class?
-  var conversationId = notification.object.id;
-  var conversation = this.makeGetRequest_(conversationId);
+  var myPostId = notification.object.id;
+  var conversation = this.makeGetRequest(myPostId);
   this.log('conversation is ', conversation);
   // TODO: check for errors.
   // TODO: rename this to something more like most recent conversation id?
-  appFriend.conversationId = conversationId;
+  appFriend.myPostId = myPostId;
   // TODO: > or >= ?
   if (Date.parse(conversation.created_time) > this.notificationCutoffTime_
       && conversation.from.id == appFriend.id) {
@@ -507,9 +447,9 @@ FacebookSocialProvider.prototype.sendMessage = function(to, msg, continuation) {
     continuation(undefined, this.ERRCODE.OFFLINE);
     return;
   }
-  if (appFriend.conversationId) {
+  if (appFriend.myPostId) {
     // Post a comment on the existing conversation.
-    this.makePostRequest_(appFriend.conversationId + '/comments',
+    this.makePostRequest(appFriend.myPostId + '/comments',
         {message: this.prefix + msg},
         function(response) {
           console.log('got response from posting comment', response);
@@ -520,7 +460,7 @@ FacebookSocialProvider.prototype.sendMessage = function(to, msg, continuation) {
         }.bind(this));
   } else {
     // Create a new conversation.
-    this.makePostRequest_('me/feed',
+    this.makePostRequest('me/feed',
         {
           privacy: "{'allow': '" + appFriend.id + "', 'value': 'CUSTOM'}",
           tags: "'" + appFriend.id  + "'",
@@ -528,7 +468,7 @@ FacebookSocialProvider.prototype.sendMessage = function(to, msg, continuation) {
           message: this.prefix + msg
         },
         function(response) {
-          appFriend.conversationId = response.id;  // TODO: verify this is correct
+          appFriend.myPostId = response.id;  // TODO: verify this is correct
         }.bind(this));
   }
   continuation();
@@ -536,7 +476,7 @@ FacebookSocialProvider.prototype.sendMessage = function(to, msg, continuation) {
 
 FacebookSocialProvider.prototype.logout = function(continuation) {
   this.appFriends = {};
-  clearInterval(this.monitorIntervalId);
+  clearInterval(this.notificationMonitorIntervalId_);
   // TODO: do I need to emit stuff?
   continuation();
 };
@@ -547,18 +487,6 @@ FacebookSocialProvider.prototype.log = function() {
   }
 }
 
-inherits = function(childCtor, parentCtor) {
-  function tempCtor() {};
-  tempCtor.prototype = parentCtor.prototype;
-  childCtor.superClass_ = parentCtor.prototype;
-  childCtor.prototype = new tempCtor();
-  childCtor.prototype.constructor = childCtor;
-  childCtor.base = function(me, methodName, var_args) {
-    var args = Array.prototype.slice.call(arguments, 2);
-    return parentCtor.prototype[methodName].apply(me, args);
-  };
-};
-
 function AppFriend(facebookSocialProvider, id, name) {
   this.facebookSocialProvider = facebookSocialProvider;
   this.id = id;
@@ -566,22 +494,136 @@ function AppFriend(facebookSocialProvider, id, name) {
   this.picture = null;
   this.lastUpdated = Date.now();
   this.lastSeen = Date.now();
-  this.conversationId = null;
+  this.myPostId = null;
+  this.myCommentId = null;
+
   // Friend is considered offline until we get the first message from them
   // TODO: how does this go back to offline when they logout?
   this.status = 'OFFLINE';
 
-  // Asynchronously get image.  TODO: add to storage
-  facebookSocialProvider.makeGetRequest_(id + '/picture?redirect=false',
-      function(response) {
-        if (response.data && response.data.url) {
-          this.picture = response.data.url;
-          console.log('got picture: ' + response.data.url);
-          facebookSocialProvider.dispatchEvent('onUserProfile',
-                                               this.getUserProfile());
-        }
-      }.bind(this));
+  this.getFromStorage().then(function(result) {
+    console.log('getFromStorage returned', result);
+
+    var allPromises = [];
+
+    // Get picture.
+    // TODO: error handling for these...
+    allPromises.push(this.loadPicture(result));
+
+    // Get myPostId and myCommentId (1:1 conversation thread with friend).
+    allPromises.push(
+        this.loadMyPostId(result)
+            .then(this.loadMyCommentId.bind(this)));
+
+    // TODO: should I wait to get status from friend before emitting?
+    // what about offline users?  they need to emit instantly
+
+    Promise.all(allPromises).then(function() {
+      console.log('dispatching appFriend profile and client after loading from storage');
+      this.facebookSocialProvider.dispatchEvent('onUserProfile', this.getUserProfile());
+      this.facebookSocialProvider.dispatchEvent('onClientState', this.getClientState());
+    }.bind(this));
+  }.bind(this)).catch(function(e) {
+    console.error('error loading user from storage', e);
+  }.bind(this));
 }
+
+AppFriend.prototype.loadPicture = function(storageResult) {
+  if (storageResult && storageResult.picture) {
+    this.picture = storageResult.picture;
+    return Promise.resolve();
+  }
+
+  return new Promise(function(fulfill, reject) {
+    this.facebookSocialProvider.makeGetRequest(
+        this.id + '/picture?redirect=false',
+        function(response) {
+          if (response.data && response.data.url) {
+            this.picture = response.data.url;
+            this.writeToStorage();
+            fulfill();
+          } else {
+            reject('Error in response' + response);
+          }
+        }.bind(this));
+  }.bind(this));
+}
+
+AppFriend.prototype.loadMyPostId = function(storageResult) {
+  if (storageResult && storageResult.myPostId) {
+    console.log('using cached postId ' + storageResult.myPostId);
+    this.myPostId = storageResult.myPostId;
+    return Promise.resolve();
+  }
+
+  return new Promise(function(fulfill, reject) {
+    this.facebookSocialProvider.makePostRequest('me/feed',
+        {
+          privacy: "{'allow': '" + this.id + "', 'value': 'CUSTOM'}",
+          tags: "'" + this.id  + "'",
+          place: DEFAULT_USER_LOCATION,
+          message: this.facebookSocialProvider.prefix + 'Hello from uProxy at ' + Date.now()  // TODO: come up with something nice
+        },
+        function(response) {
+          // TODO: error handling?
+          console.log('setting myPostId to ' + response.id);
+          this.myPostId = response.id;
+          this.writeToStorage();
+          fulfill();
+        }.bind(this));
+  }.bind(this));
+}
+
+AppFriend.prototype.loadMyCommentId = function(storageResult) {
+  console.log('loadMyCommentId called, this.myPostId is ' + this.myPostId);
+  if (storageResult && storageResult.myCommentId) {
+    this.myCommentId = storageResult.myCommentId;
+    return Promise.resolve();
+  }
+
+  // TODO: this is wrong!
+  return new Promise(function(fulfill, reject) {
+    console.log('making post request to ' +  this.myPostId + '/comments')
+    var message = this.facebookSocialProvider.prefix + 'initializing comment';
+    console.log('sending comment message ' + message);
+    this.facebookSocialProvider.makePostRequest(this.myPostId + '/comments',
+        {message: message},
+        function(response) {
+          // TODO: error handling?
+          console.log('setting myCommentId to ' + response.id);
+          this.myCommentId = response.id;
+          fulfill();
+        }.bind(this));
+  }.bind(this));
+}
+
+AppFriend.prototype.getStorageKey = function() {
+  // TODO: do user ids change periodically?  How will this affect storage
+  return this.facebookSocialProvider.myId + '-' + this.id;
+}
+
+AppFriend.prototype.getFromStorage = function() {
+  return this.facebookSocialProvider.storage.get(this.getStorageKey())
+      .then(function(result) {
+    console.log('got storage result for user ' + this.id + ', ', result);
+    try {
+      return Promise.resolve(JSON.parse(result));
+    } catch (e) {
+      return Promise.resolve({});
+    }
+  }.bind(this));
+};
+
+AppFriend.prototype.writeToStorage = function() {
+  var data = {
+    picture: this.picture,
+    myPostId: this.myPostId,
+    myCommentId: this.myCommentId
+  };
+  // Store as JSON string.
+  this.facebookSocialProvider.storage.set(this.getStorageKey(),
+                                          JSON.stringify(data));
+};
 
 AppFriend.prototype.getClientState = function() {
   return {
