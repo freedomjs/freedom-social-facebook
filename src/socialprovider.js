@@ -1,3 +1,96 @@
+/*
+
+
+newest idea:
+- create a uproxy page / object
+  - when users are signed in they "like" that page
+  - when users sign out, they delete their "liking" of that page
+    - TBD: how to handle multiple instances simultaneously messing with this?
+        maybe each online instance periodically verifies that the page is liked?
+  - when you sign in, see which of your friends also like this page
+      those are the ones online
+- now only create a new post/comment when sending a message
+    - you should only be sending a message to online users (offline will fail)
+    - if for some reason we think someone is online but they aren't (e.g. they pulled the plug) the message
+      will just go nowhere, not the end of the world
+
+TODO: how to verify that online contacts are using the same comment ids?  probably same logic as below:
+  - edit myCommentId, check for a reply on theirCommentId
+  - if no reply in 1 minute, make a new post/comment
+      if no reply in 1 minute to that, delete it, they aren't really online
+
+TODO: how to manage multiple instances?  if I post, and multiple instances resond, that sucks
+  - maybe each post (not comment but post) should be the instance id?
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+newest appFriend logic:
+- if there is no post from you to your friend, create one
+
+- if you have both a myCommentId and theirCommentId on that post
+    update your myCommentId
+    if they respond by updating theirCommentId (with some special message) within 1 minute:
+      they are online and you have agreed on myCommentId and theirCommentId
+    if they don't response in 1 minute
+      post a new comment (new myCommentId)
+        if they are online they will get a notification and should then also post a new comment
+          now we can use the new commentIds (from both of us) and delete the old myCommentId
+        if we don't get a new comment from them within a minute, delete this comment (they are really offline)
+- whenever we get a comment from a friend, we know they are online.  create a new commentId for them as they might not have our commentId
+
+
+in other words:
+- first try updating myCommentId to see if there is a response on theirCommentId (some ack that acknoledges they are reading the same myCommentId)
+    - if no response do nothing (don't delete myCommentId yet - they might really just be offline)
+- second try create a new comment
+    - if there is no response in a minute, delete that comment - they are really offline
+    - if we do get a response (new notification comment)
+        that new comment is theirCommentId, and should give you myCommentId that they are listening to
+
+
+initial comment updates (first try should be):
+  "online at <datetime>"
+      if we see this within the last 5 minutes (constant), consider them online
+
+second try comment notifications should be:
+  "Creating new comment thread at <datetime>"
+their reply to this should be a new thread
+  "Creating new thread in response to <commentId> at <datetime>"
+    when we see this, don't do anything all is good
+if we don't see a reply in a few minutes, delete my comment
+*/
+
+
+
+
+
+
+
+
+
+
+
+
+
 /*globals freedom:true,setTimeout,console,VCardStore,global */
 /*jslint indent:2,white:true,sloppy:true */
 
@@ -67,6 +160,8 @@ var FacebookSocialProvider = function(dispatchEvent) {
  */
 FacebookSocialProvider.prototype.login = function(loginOpts, continuation) {
   this.prefix = 'uproxy: ';  // TODO: get from loginOpts
+  this.appId = 161927677344933;  // TODO: get from loginOpts, currently using uProxy
+
   if (this.credentials) {
     // Already have login credentials, load buddylist
     // TODO: clear state?
@@ -136,12 +231,11 @@ FacebookSocialProvider.prototype.completeLogin_ = function(continuation) {
  * @private
  */
 FacebookSocialProvider.prototype.monitorForIncomingMessages_ = function() {
-  return;  // TODO: handle this
-
   // TODO: ensure that this isn't called multiple times...  use clearInterval
   this.notificationMonitorIntervalId_ = setInterval(function() {
     var notificationsResp = this.makeGetRequest('me/notifications');
-    this.log('got notifications ', notificationsResp);
+    console.log('got notifications ', notificationsResp);
+    return;  // TODO: handle this
     if (notificationsResp.data && notificationsResp.data.length > 0) {
       // TODO: speed this up by processing in order and stopping at cutoff?
       // Process notifications in ascending time order (reverse array order)
@@ -270,6 +364,38 @@ FacebookSocialProvider.prototype.makePostRequest = function(resourceStr,
   this.log('postString: ' + postString);
   xhr.send(postString);
 };
+
+FacebookSocialProvider.prototype.makeDeleteRequest = function(resourceStr) {
+  // Create url from resourceStr and accessToken.
+  var url = 'https://graph.facebook.com/v2.1/' + resourceStr + '?' + 
+      'access_token=' + this.credentials['accessToken'];
+
+  var xhr = new XMLHttpRequest();
+  xhr.open('DELETE', url, true);  // async
+  xhr.addEventListener('load', function(event) {
+    try {
+      var response = JSON.parse(xhr.response);
+      this.log('got delete response ', response);
+    }
+    catch (e) {
+      console.error(e);
+    }
+  }.bind(this), false);
+  xhr.addEventListener('error', function(evt) {
+    // TODO: this is an error reaching the server, not necessarily an error
+    // returned from the server
+    console.error('Error occurred while making delete request', evt);
+  }.bind(this), false);
+
+  // TODO: is this needed for delete?
+  var allArgs = {};
+  allArgs['accesss_token'] = this.credentials['accessToken'];  // TODO: needed?
+  this.log('allArgs ', allArgs);
+  var postString = urlEncode(allArgs);
+  this.log('postString: ' + postString);
+  xhr.send(postString);
+};
+
 
 
 function urlEncode(obj) {
@@ -447,30 +573,7 @@ FacebookSocialProvider.prototype.sendMessage = function(to, msg, continuation) {
     continuation(undefined, this.ERRCODE.OFFLINE);
     return;
   }
-  if (appFriend.myPostId) {
-    // Post a comment on the existing conversation.
-    this.makePostRequest(appFriend.myPostId + '/comments',
-        {message: this.prefix + msg},
-        function(response) {
-          console.log('got response from posting comment', response);
-          setTimeout(function() {
-            // Delete comment sometime after it's been posted.
-            this.makeDeleteRequest_(response.id);
-          }.bind(this), 5000);  // TODO: constant
-        }.bind(this));
-  } else {
-    // Create a new conversation.
-    this.makePostRequest('me/feed',
-        {
-          privacy: "{'allow': '" + appFriend.id + "', 'value': 'CUSTOM'}",
-          tags: "'" + appFriend.id  + "'",
-          place: DEFAULT_USER_LOCATION,
-          message: this.prefix + msg
-        },
-        function(response) {
-          appFriend.myPostId = response.id;  // TODO: verify this is correct
-        }.bind(this));
-  }
+  appFriend.sendMessage(msg);  // TODO: implement
   continuation();
 };
 
@@ -487,8 +590,8 @@ FacebookSocialProvider.prototype.log = function() {
   }
 }
 
-function AppFriend(facebookSocialProvider, id, name) {
-  this.facebookSocialProvider = facebookSocialProvider;
+function AppFriend(fbProvider, id, name) {
+  this.fbProvider = fbProvider;
   this.id = id;
   this.name = name;
   this.picture = null;
@@ -496,6 +599,28 @@ function AppFriend(facebookSocialProvider, id, name) {
   this.lastSeen = Date.now();
   this.myPostId = null;
   this.myCommentId = null;
+
+  // TODO: how do we know our messages are being received vs the user being offline?
+  // TODO: we probably need a way for the peer to request a conversation id from me?
+  // TODO: what if I'm posting, and they are posting, but we don't know about each other's conversation id (because the original notification is lost and the conversation id is not saved?)
+  /* possible solutions:
+    - start a new post between users every month (i.e. new notification), then read within the last month to get the comment id
+        - this is probably what we want to do, otherwise we might keep posting new stuff if the peers are never online at the same time
+    - if one peer loses their storage, they post again...  when the other side gets the post, even though they have an existing myCommentId, they create a new one
+    - what happens if 2 peers keep signing on when the other isn't online, and keep generating new posts?
+
+
+    - easiest way: may have some spam:
+      when you sign on, if you don't have theirCommentId, create a new post and myCommentId
+        - if they are online, they will make their own post and theirCommentId right away
+        - if they are offline, nothing will happen.  Then when they sign in later they will post using the same logic on their side
+        - if 2 contacts are on at the same time, they will exchange posts and have each other's comments
+        - if they are never online at the same time they will keep posting to each other every time they sign in
+            - ways to make this better:
+                - look at notifications for the past X days to see if they already have a comment for you.  If so "ack" that...  TODO: how would this work?
+                - if you don't get a reply with theirCommentId in ~1 minute, delete your post and commentId
+  */
+
 
   // Friend is considered offline until we get the first message from them
   // TODO: how does this go back to offline when they logout?
@@ -510,18 +635,16 @@ function AppFriend(facebookSocialProvider, id, name) {
     // TODO: error handling for these...
     allPromises.push(this.loadPicture(result));
 
-    // Get myPostId and myCommentId (1:1 conversation thread with friend).
-    allPromises.push(
-        this.loadMyPostId(result)
-            .then(this.loadMyCommentId.bind(this)));
+    // Get myPostId and myCommentId (used to send messages from me to my friend).
+    allPromises.push(this.loadMyPostId().then(this.loadMyCommentId.bind(this)));
 
     // TODO: should I wait to get status from friend before emitting?
     // what about offline users?  they need to emit instantly
 
     Promise.all(allPromises).then(function() {
       console.log('dispatching appFriend profile and client after loading from storage');
-      this.facebookSocialProvider.dispatchEvent('onUserProfile', this.getUserProfile());
-      this.facebookSocialProvider.dispatchEvent('onClientState', this.getClientState());
+      this.fbProvider.dispatchEvent('onUserProfile', this.getUserProfile());
+      this.fbProvider.dispatchEvent('onClientState', this.getClientState());
     }.bind(this));
   }.bind(this)).catch(function(e) {
     console.error('error loading user from storage', e);
@@ -535,7 +658,7 @@ AppFriend.prototype.loadPicture = function(storageResult) {
   }
 
   return new Promise(function(fulfill, reject) {
-    this.facebookSocialProvider.makeGetRequest(
+    this.fbProvider.makeGetRequest(
         this.id + '/picture?redirect=false',
         function(response) {
           if (response.data && response.data.url) {
@@ -549,61 +672,79 @@ AppFriend.prototype.loadPicture = function(storageResult) {
   }.bind(this));
 }
 
+
 AppFriend.prototype.loadMyPostId = function(storageResult) {
+  console.log('in loadMyPostId');
   if (storageResult && storageResult.myPostId) {
-    console.log('using cached postId ' + storageResult.myPostId);
     this.myPostId = storageResult.myPostId;
     return Promise.resolve();
   }
 
   return new Promise(function(fulfill, reject) {
-    this.facebookSocialProvider.makePostRequest('me/feed',
+    // Make a new post.
+    this.fbProvider.makePostRequest('me/feed',
         {
           privacy: "{'allow': '" + this.id + "', 'value': 'CUSTOM'}",
           tags: "'" + this.id  + "'",
           place: DEFAULT_USER_LOCATION,
-          message: this.facebookSocialProvider.prefix + 'Hello from uProxy at ' + Date.now()  // TODO: come up with something nice
+          message: this.fbProvider.prefix + 'Hello from uProxy at ' + Date.now()  // TODO: come up with something nice
         },
         function(response) {
-          // TODO: error handling?
           console.log('setting myPostId to ' + response.id);
-          this.myPostId = response.id;
-          this.writeToStorage();
-          fulfill();
+          if (!response.id) {
+            reject();
+          } else {
+            this.myPostId = response.id;
+            this.writeToStorage();
+            fulfill();
+          }
         }.bind(this));
   }.bind(this));
 }
 
+
+
+// TODO: what happens if my friend signs on a few seconds after me?
+//      that minute before cleanup should actually be used for how old 
+//      notifications should be that we look at
 AppFriend.prototype.loadMyCommentId = function(storageResult) {
-  console.log('loadMyCommentId called, this.myPostId is ' + this.myPostId);
+  console.log('in loadMyCommentId');
   if (storageResult && storageResult.myCommentId) {
     this.myCommentId = storageResult.myCommentId;
     return Promise.resolve();
   }
 
-  // TODO: this is wrong!
   return new Promise(function(fulfill, reject) {
-    console.log('making post request to ' +  this.myPostId + '/comments')
-    var message = this.facebookSocialProvider.prefix + 'initializing comment';
-    console.log('sending comment message ' + message);
-    this.facebookSocialProvider.makePostRequest(this.myPostId + '/comments',
-        {message: message},
+    this.fbProvider.makePostRequest(this.myPostId + '/comments',
+        {message: 'initializing comment'},
         function(response) {
           // TODO: error handling?
           console.log('setting myCommentId to ' + response.id);
           this.myCommentId = response.id;
+          this.writeToStorage();
+          setTimeout(function() {
+            if (this.myCommentId && !this.theirCommentId) {
+              // Friend hasn't replied to my comment and is probably
+              // offline.  Delete myCommentId to minimize notification
+              // spam.  When friend signs online, they will notify me
+              // with a theirCommentId, and I can post my comment again
+              // in response.
+              console.log('Deleting myCommentId: ' + this.myCommentId);
+              this.fbProvider.makeDeleteRequest(this.myCommentId);
+            }
+          }.bind(this), 60 * 1000);
           fulfill();
-        }.bind(this));
-  }.bind(this));
+        }.bind(this));    // end of makePostRequest to <post_id>/comments
+  }.bind(this));  // end of return new Promise
 }
 
 AppFriend.prototype.getStorageKey = function() {
   // TODO: do user ids change periodically?  How will this affect storage
-  return this.facebookSocialProvider.myId + '-' + this.id;
+  return this.fbProvider.myId + '-' + this.id;
 }
 
 AppFriend.prototype.getFromStorage = function() {
-  return this.facebookSocialProvider.storage.get(this.getStorageKey())
+  return this.fbProvider.storage.get(this.getStorageKey())
       .then(function(result) {
     console.log('got storage result for user ' + this.id + ', ', result);
     try {
@@ -621,8 +762,7 @@ AppFriend.prototype.writeToStorage = function() {
     myCommentId: this.myCommentId
   };
   // Store as JSON string.
-  this.facebookSocialProvider.storage.set(this.getStorageKey(),
-                                          JSON.stringify(data));
+  this.fbProvider.storage.set(this.getStorageKey(), JSON.stringify(data));
 };
 
 AppFriend.prototype.getClientState = function() {
